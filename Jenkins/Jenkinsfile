@@ -1,0 +1,57 @@
+pipeline {
+  agent any
+  environment {
+    AWS_CREDENTIALS = credentials('aws-creds')
+  }
+
+  stages {
+    stage('Checkout') {
+      steps { checkout scm }
+    }
+
+    stage('Terraform Init') {
+      steps {
+        sh 'cd terraform && terraform init -input=false'
+      }
+    }
+
+    stage('Terraform Apply') {
+      steps {
+        withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', accessKeyVariable: 'AWS_ACCESS_KEY_ID', secretKeyVariable: 'AWS_SECRET_ACCESS_KEY', credentialsId: 'aws-creds']]) {
+          sh 'cd terraform && terraform apply -auto-approve'
+        }
+      }
+    }
+
+    stage('Export Kubeconfig') {
+      steps {
+        sh "cd terraform && terraform output -raw kubeconfig > ../jenkins_kubeconfig"
+        sh 'export KUBECONFIG=jenkins_kubeconfig'
+      }
+    }
+
+    stage('Deploy App') {
+      steps {
+        sh 'kubectl apply -f app/deployment.yaml'
+        sh 'kubectl apply -f app/service.yaml'
+      }
+    }
+
+    stage('Smoke Test') {
+      steps {
+        sh 'kubectl get pods -l app=myapp -o wide'
+      }
+    }
+
+    stage('Destroy (optional)') {
+      when { expression { return params.DESTROY == true } }
+      steps {
+        sh 'cd terraform && terraform destroy -auto-approve'
+      }
+    }
+  }
+
+  parameters {
+    booleanParam(name: 'DESTROY', defaultValue: false, description: 'Destroy infra after run')
+  }
+}
